@@ -12,6 +12,11 @@
   #define LED_STATE_ON 1
 #endif
 
+// Home-screen battery: show estimated SoC under the icon (see platformio build_flags).
+#ifndef UI_SHOW_BATTERY_PCT
+  #define UI_SHOW_BATTERY_PCT 0
+#endif
+
 #ifdef PIN_BUZZER
   #include <helpers/ui/buzzer.h>
 #endif

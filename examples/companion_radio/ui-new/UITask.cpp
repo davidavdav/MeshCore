@@ -128,9 +128,9 @@ class HomeScreen : public UIScreen {
     int iconHeight = 10;
     int iconX = display.width() - iconWidth - 5; // Position the icon near the top-right corner
     int iconY = 0;
-    display.setColor(DisplayDriver::GREEN);
 
     // battery outline
+    display.setColor(DisplayDriver::GREEN);
     display.drawRect(iconX, iconY, iconWidth, iconHeight);
 
     // battery "cap"
@@ -146,6 +146,23 @@ class HomeScreen : public UIScreen {
       display.setColor(DisplayDriver::RED);
       display.drawXbm(iconX - 9, iconY + 1, muted_icon, 8, 8);
     }
+#endif
+
+#if UI_SHOW_BATTERY_PCT
+    // Percentage centered below the battery body + cap
+    char pctbuf[8];
+    snprintf(pctbuf, sizeof(pctbuf), "%d%%", batteryPercentage);
+    display.setTextSize(1);
+    display.setColor(DisplayDriver::GREEN);
+    const int battClusterW = iconWidth + 3; // include cap width
+    const int pctW = (int)display.getTextWidth(pctbuf);
+    int pctX = iconX + (battClusterW - pctW) / 2;
+    if (pctX < 0) {
+      pctX = 0;
+    }
+    const int pctY = iconY + iconHeight + 1;
+    display.setCursor(pctX, pctY);
+    display.print(pctbuf);
 #endif
   }
 
