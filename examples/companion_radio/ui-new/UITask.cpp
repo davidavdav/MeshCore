@@ -109,8 +109,11 @@ class HomeScreen : public UIScreen {
   NodePrefs* _node_prefs;
   uint8_t _page;
   bool _shutdown_init;
-  // Leaky-integrator LPF on battery mV for stable icon: y = (9*y + x)/10; first sample initializes y.
-  int32_t _batt_lpf_mv;
+  // Rolling mean of last N battery mV readings (each home-screen render adds one sample).
+  static const uint8_t BATT_MV_AVG_N = 4;
+  int32_t _batt_mv_samples[BATT_MV_AVG_N];
+  uint8_t _batt_mv_idx;
+  uint8_t _batt_mv_count;
   AdvertPath recent[UI_RECENT_LIST_SIZE];
 
 
@@ -194,7 +197,7 @@ class HomeScreen : public UIScreen {
 public:
   HomeScreen(UITask* task, mesh::RTCClock* rtc, SensorManager* sensors, NodePrefs* node_prefs)
      : _task(task), _rtc(rtc), _sensors(sensors), _node_prefs(node_prefs), _page(0),
-       _shutdown_init(false), _batt_lpf_mv(-1), sensors_lpp(200) {  }
+       _shutdown_init(false), _batt_mv_idx(0), _batt_mv_count(0), sensors_lpp(200) {  }
 
   void poll() override {
     if (_shutdown_init && !_task->isButtonPressed()) {  // must wait for USR button to be released
@@ -212,14 +215,25 @@ public:
     display.setCursor(0, 0);
     display.print(filtered_name);
 
-    // battery voltage (low-pass filtered mV for stable bar / label)
+    // battery voltage: average of last BATT_MV_AVG_N consecutive mV samples
     const int32_t raw_mv = static_cast<int32_t>(_task->getBattMilliVolts());
-    if (_batt_lpf_mv < 0) {
-      _batt_lpf_mv = raw_mv;
-    } else {
-      _batt_lpf_mv = (9 * _batt_lpf_mv + raw_mv) / 10;
+    _batt_mv_samples[_batt_mv_idx] = raw_mv;
+    _batt_mv_idx = static_cast<uint8_t>((_batt_mv_idx + 1) % BATT_MV_AVG_N);
+    if (_batt_mv_count < BATT_MV_AVG_N) {
+      _batt_mv_count++;
     }
-    renderBatteryIndicator(display, static_cast<uint16_t>(_batt_lpf_mv));
+    int64_t sum_mv = 0;
+    if (_batt_mv_count < BATT_MV_AVG_N) {
+      for (uint8_t i = 0; i < _batt_mv_count; i++) {
+        sum_mv += _batt_mv_samples[i];
+      }
+    } else {
+      for (uint8_t i = 0; i < BATT_MV_AVG_N; i++) {
+        sum_mv += _batt_mv_samples[i];
+      }
+    }
+    const int32_t avg_mv = static_cast<int32_t>(sum_mv / _batt_mv_count);
+    renderBatteryIndicator(display, static_cast<uint16_t>(avg_mv));
 
     // curr page indicator
     int y = 14;
