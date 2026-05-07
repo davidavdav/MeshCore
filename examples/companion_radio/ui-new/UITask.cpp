@@ -382,6 +382,10 @@ public:
             r.readVoltage(v);
             strcpy(name, "voltage"); sprintf(buf, "%6.2f", v);
             break;
+          case LPP_PERCENTAGE:
+            r.readPercentage(v);
+            strcpy(name, "percentage"); sprintf(buf, "%.0f", v);
+            break;
           case LPP_CURRENT:
             r.readCurrent(v);
             strcpy(name, "current"); sprintf(buf, "%.3f", v);

@@ -2,6 +2,7 @@
 
 #include <Arduino.h> // needed for PlatformIO
 #include <Mesh.h>
+#include <helpers/LiPo.h>
 
 #define CMD_APP_START                 1
 #define CMD_SEND_TXT_MSG              2
@@ -42,6 +43,23 @@
 #define CMD_SET_DEVICE_PIN            37
 #define CMD_SET_OTHER_PARAMS          38
 #define CMD_SEND_TELEMETRY_REQ        39  // can deprecate this
+
+namespace {
+
+void add_self_battery_to_telemetry(CayenneLPP& telemetry) {
+  const float v_volts = static_cast<float>(board.getBattMilliVolts()) / 1000.0f;
+  telemetry.addVoltage(TELEM_CHANNEL_SELF, v_volts);
+  float pct = lipo_volts_to_percent(v_volts);
+  if (pct < 0.0f) {
+    pct = 0.0f;
+  }
+  if (pct > 100.0f) {
+    pct = 100.0f;
+  }
+  telemetry.addPercentage(TELEM_CHANNEL_SELF, pct);
+}
+
+}  // namespace
 #define CMD_GET_CUSTOM_VARS           40
 #define CMD_SET_CUSTOM_VAR            41
 #define CMD_GET_ADVERT_PATH           42
@@ -641,7 +659,7 @@ uint8_t MyMesh::onContactRequest(const ContactInfo &contact, uint32_t sender_tim
 
     if (permissions & TELEM_PERM_BASE) { // only respond if base permission bit is set
       telemetry.reset();
-      telemetry.addVoltage(TELEM_CHANNEL_SELF, (float)board.getBattMilliVolts() / 1000.0f);
+      add_self_battery_to_telemetry(telemetry);
       // query other sensors -- target specific
       sensors.querySensors(permissions, telemetry);
 
@@ -1612,7 +1630,7 @@ void MyMesh::handleCmdFrame(size_t len) {
     }
   } else if (cmd_frame[0] == CMD_SEND_TELEMETRY_REQ && len == 4) {  // 'self' telemetry request
     telemetry.reset();
-    telemetry.addVoltage(TELEM_CHANNEL_SELF, (float)board.getBattMilliVolts() / 1000.0f);
+    add_self_battery_to_telemetry(telemetry);
     // query other sensors -- target specific
     sensors.querySensors(0xFF, telemetry);
 

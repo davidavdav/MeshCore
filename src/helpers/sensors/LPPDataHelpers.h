@@ -132,6 +132,10 @@ public:
     pct = getFloat(&_buf[_pos], 1, 2, false); _pos += 1;
     return _pos <= _len;
   }
+  bool readPercentage(float& pct) {
+    pct = (float)_buf[_pos++];
+    return _pos <= _len;
+  }
   bool readAltitude(float& m) {
     m = getFloat(&_buf[_pos], 2, 1, true); _pos += 2;
     return _pos <= _len;
@@ -166,6 +170,10 @@ public:
       case LPP_DIRECTION:
       case LPP_POWER:
         _pos += 2; break;
+      case LPP_PERCENTAGE:
+      case LPP_RELATIVE_HUMIDITY:
+      case LPP_PRESENCE:
+        _pos += 1; break;
       default:
         _pos++;
     }
