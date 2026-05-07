@@ -1,7 +1,10 @@
 #include "UITask.h"
 #include <helpers/TxtDataHelpers.h>
+#include <helpers/LiPo.h>
 #include "../MyMesh.h"
 #include "target.h"
+
+
 #ifdef WIFI_SSID
   #include <WiFi.h>
 #endif
@@ -106,20 +109,15 @@ class HomeScreen : public UIScreen {
   NodePrefs* _node_prefs;
   uint8_t _page;
   bool _shutdown_init;
+  // Leaky-integrator LPF on battery mV for stable icon: y = (9*y + x)/10; first sample initializes y.
+  int32_t _batt_lpf_mv;
   AdvertPath recent[UI_RECENT_LIST_SIZE];
 
 
   void renderBatteryIndicator(DisplayDriver& display, uint16_t batteryMilliVolts) {
-    // Convert millivolts to percentage
-#ifndef BATT_MIN_MILLIVOLTS
-  #define BATT_MIN_MILLIVOLTS 3000
-#endif
-#ifndef BATT_MAX_MILLIVOLTS
-  #define BATT_MAX_MILLIVOLTS 4200
-#endif
-    const int minMilliVolts = BATT_MIN_MILLIVOLTS;
-    const int maxMilliVolts = BATT_MAX_MILLIVOLTS;
-    int batteryPercentage = ((batteryMilliVolts - minMilliVolts) * 100) / (maxMilliVolts - minMilliVolts);
+    const float v_volts = static_cast<float>(batteryMilliVolts) / 1000.0f;
+    int batteryPercentage = static_cast<int>(lipo_volts_to_percent(v_volts) + 0.5f);
+
     if (batteryPercentage < 0) batteryPercentage = 0; // Clamp to 0%
     if (batteryPercentage > 100) batteryPercentage = 100; // Clamp to 100%
 
@@ -196,7 +194,7 @@ class HomeScreen : public UIScreen {
 public:
   HomeScreen(UITask* task, mesh::RTCClock* rtc, SensorManager* sensors, NodePrefs* node_prefs)
      : _task(task), _rtc(rtc), _sensors(sensors), _node_prefs(node_prefs), _page(0),
-       _shutdown_init(false), sensors_lpp(200) {  }
+       _shutdown_init(false), _batt_lpf_mv(-1), sensors_lpp(200) {  }
 
   void poll() override {
     if (_shutdown_init && !_task->isButtonPressed()) {  // must wait for USR button to be released
@@ -214,8 +212,14 @@ public:
     display.setCursor(0, 0);
     display.print(filtered_name);
 
-    // battery voltage
-    renderBatteryIndicator(display, _task->getBattMilliVolts());
+    // battery voltage (low-pass filtered mV for stable bar / label)
+    const int32_t raw_mv = static_cast<int32_t>(_task->getBattMilliVolts());
+    if (_batt_lpf_mv < 0) {
+      _batt_lpf_mv = raw_mv;
+    } else {
+      _batt_lpf_mv = (9 * _batt_lpf_mv + raw_mv) / 10;
+    }
+    renderBatteryIndicator(display, static_cast<uint16_t>(_batt_lpf_mv));
 
     // curr page indicator
     int y = 14;
