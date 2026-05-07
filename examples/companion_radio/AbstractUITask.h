@@ -12,6 +12,7 @@
 #endif
 
 #include "NodePrefs.h"
+#include <helpers/LiPo.h>
 
 enum class UIEventType {
     none,
@@ -36,6 +37,7 @@ public:
   void setHasConnection(bool connected) { _connected = connected; }
   bool hasConnection() const { return _connected; }
   uint16_t getBattMilliVolts() const { return _board->getBattMilliVolts(); }
+  uint16_t getBattMilliVoltsAveraged() const { return average_battery_millivolts(*_board); }
   bool isSerialEnabled() const { return _serial->isEnabled(); }
   void enableSerial() { _serial->enable(); }
   void disableSerial() { _serial->disable(); }

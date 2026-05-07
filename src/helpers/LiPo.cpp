@@ -1,5 +1,26 @@
 #include "LiPo.h"
 
+#include <Arduino.h>
+#include <MeshCore.h>
+
+namespace {
+
+constexpr int kBattAvgSamples = 4;
+constexpr int kBattAvgDelayMs = 10;
+
+}  // namespace
+
+uint16_t average_battery_millivolts(mesh::MainBoard& board) {
+  uint32_t sum = 0;
+  for (int i = 0; i < kBattAvgSamples; i++) {
+    sum += board.getBattMilliVolts();
+    if (i + 1 < kBattAvgSamples) {
+      delay(kBattAvgDelayMs);
+    }
+  }
+  return static_cast<uint16_t>(sum / static_cast<uint32_t>(kBattAvgSamples));
+}
+
 // Voltage breakpoints (V) for 1S LiPo, high to low; 20 intervals of 5% each.
 // Source table: https://intofpv.com/t-lipo-voltage-quick-chart
 float lipo_volts_to_percent(float voltage_volts) {

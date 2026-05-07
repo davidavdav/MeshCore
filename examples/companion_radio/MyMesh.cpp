@@ -47,7 +47,7 @@
 namespace {
 
 void add_self_battery_to_telemetry(CayenneLPP& telemetry) {
-  const float v_volts = static_cast<float>(board.getBattMilliVolts()) / 1000.0f;
+  const float v_volts = static_cast<float>(average_battery_millivolts(board)) / 1000.0f;
   telemetry.addVoltage(TELEM_CHANNEL_SELF, v_volts);
   float pct = lipo_volts_to_percent(v_volts);
   if (pct < 0.0f) {
