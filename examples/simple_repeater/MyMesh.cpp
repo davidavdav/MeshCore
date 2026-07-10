@@ -33,6 +33,16 @@
   #define ADMIN_PASSWORD "password"
 #endif
 
+#ifndef CHAN_PROP_RETRY_ENABLE
+  #define CHAN_PROP_RETRY_ENABLE 1
+#endif
+#ifndef CHAN_PROP_RETRY_TIMEOUT_MS
+  #define CHAN_PROP_RETRY_TIMEOUT_MS 5000
+#endif
+#ifndef CHAN_PROP_RETRY_MAX_ATTEMPTS
+  #define CHAN_PROP_RETRY_MAX_ATTEMPTS 4
+#endif
+
 #ifndef SERVER_RESPONSE_DELAY
   #define SERVER_RESPONSE_DELAY 300
 #endif
@@ -344,7 +354,7 @@ int MyMesh::handleRequest(ClientInfo *sender, uint32_t sender_timestamp, uint8_t
       int results_offset = 0;
       uint8_t results_buffer[130];
       for(int index = 0; index < count && index + offset < neighbours_count; index++){
-        
+
         // stop if we can't fit another entry in results
         int entry_size = pubkey_prefix_length + 4 + 1;
         if(results_offset + entry_size > sizeof(results_buffer)){
@@ -473,6 +483,12 @@ void MyMesh::logRxRaw(float snr, float rssi, const uint8_t raw[], int len) {
 }
 
 void MyMesh::logRx(mesh::Packet *pkt, int len, float score) {
+#if CHAN_PROP_RETRY_ENABLE
+  if (_chan_prop_watch.active) {
+    checkChanPropRepeat(pkt);
+  }
+#endif
+
 #ifdef WITH_BRIDGE
   if (_prefs.bridge_pkt_src == 1) {
     bridge.sendPacket(pkt);
@@ -499,6 +515,16 @@ void MyMesh::logRx(mesh::Packet *pkt, int len, float score) {
 }
 
 void MyMesh::logTx(mesh::Packet *pkt, int len) {
+#if CHAN_PROP_RETRY_ENABLE
+  if (_chan_prop_watch.active) {
+    uint8_t hash[MAX_HASH_SIZE];
+    pkt->calculatePacketHash(hash);
+    if (memcmp(hash, _chan_prop_watch.hash, MAX_HASH_SIZE) == 0) {
+      _chan_prop_watch.deadline = futureMillis(CHAN_PROP_RETRY_TIMEOUT_MS);
+    }
+  }
+#endif
+
 #ifdef WITH_BRIDGE
   if (_prefs.bridge_pkt_src == 0) {
     bridge.sendPacket(pkt);
@@ -565,6 +591,111 @@ bool MyMesh::filterRecvFloodPacket(mesh::Packet* pkt) {
   // do normal processing
   return false;
 }
+
+#if CHAN_PROP_RETRY_ENABLE
+
+static bool isRetransmitAction(mesh::DispatcherAction action) {
+  return (action & 0xFF000000) != 0;
+}
+
+void MyMesh::cancelChanPropWatch() {
+  _chan_prop_watch.active = false;
+}
+
+void MyMesh::startChanPropWatch(mesh::Packet *pkt, const uint8_t *wire, uint8_t wire_len) {
+  pkt->calculatePacketHash(_chan_prop_watch.hash);
+  memcpy(_chan_prop_watch.wire, wire, wire_len);
+  _chan_prop_watch.wire_len = wire_len;
+  _chan_prop_watch.path_hash_size = pkt->getPathHashSize();
+  _chan_prop_watch.is_transport_flood = pkt->getRouteType() == ROUTE_TYPE_TRANSPORT_FLOOD;
+  if (_chan_prop_watch.is_transport_flood) {
+    _chan_prop_watch.transport_codes[0] = pkt->transport_codes[0];
+    _chan_prop_watch.transport_codes[1] = pkt->transport_codes[1];
+  }
+  _chan_prop_watch.attempts = 1;
+  _chan_prop_watch.deadline = 0;  // armed on first matching TX (see logTx)
+  _chan_prop_watch.active = true;
+}
+
+void MyMesh::checkChanPropRepeat(mesh::Packet *pkt) {
+  if (!pkt->isRouteFlood()) return;
+
+  uint8_t type = pkt->getPayloadType();
+  if (type != PAYLOAD_TYPE_GRP_TXT && type != PAYLOAD_TYPE_GRP_DATA) return;
+
+  uint8_t hash[MAX_HASH_SIZE];
+  pkt->calculatePacketHash(hash);
+  if (memcmp(hash, _chan_prop_watch.hash, MAX_HASH_SIZE) != 0) return;
+
+  if (pkt->getPathHashCount() > 0) {
+    MESH_DEBUG_PRINTLN("chan prop retry: heard repeat, path_count=%d", (uint32_t)pkt->getPathHashCount());
+    cancelChanPropWatch();
+  }
+}
+
+void MyMesh::retryChanPropFlood() {
+  mesh::Packet *pkt = obtainNewPacket();
+  if (pkt == NULL) {
+    MESH_DEBUG_PRINTLN("chan prop retry: packet pool empty");
+    return;
+  }
+
+  if (!pkt->readFrom(_chan_prop_watch.wire, _chan_prop_watch.wire_len)) {
+    MESH_DEBUG_PRINTLN("chan prop retry: failed to restore packet");
+    _mgr->free(pkt);
+    return;
+  }
+
+  getTables()->clear(pkt);
+
+  // Re-queue the saved forward (path includes our hash). Do not use sendFlood() here:
+  // it resets path_count to 0, which would TX as [] instead of [199a].
+  getTables()->hasSeen(pkt);
+  uint32_t delay = getRetransmitDelay(pkt);
+  sendPacket(pkt, pkt->getPathHashCount(), delay);
+  MESH_DEBUG_PRINTLN("chan prop retry: attempt %d/%d", (uint32_t)_chan_prop_watch.attempts + 1,
+                     (uint32_t)CHAN_PROP_RETRY_MAX_ATTEMPTS);
+}
+
+void MyMesh::checkChanPropRetry() {
+  if (!_chan_prop_watch.active) return;
+  if (_chan_prop_watch.deadline == 0) return;
+  if (!millisHasNowPassed(_chan_prop_watch.deadline)) return;
+
+  if (_prefs.disable_fwd || _chan_prop_watch.attempts >= CHAN_PROP_RETRY_MAX_ATTEMPTS) {
+    MESH_DEBUG_PRINTLN("chan prop retry: giving up after %d attempt(s)", (uint32_t)_chan_prop_watch.attempts);
+    cancelChanPropWatch();
+    return;
+  }
+
+  retryChanPropFlood();
+  _chan_prop_watch.attempts++;
+  _chan_prop_watch.deadline = 0;  // re-armed on next matching TX (see logTx)
+}
+
+mesh::DispatcherAction MyMesh::onRecvPacket(mesh::Packet *pkt) {
+  bool watch_candidate = false;
+
+  if (!_prefs.disable_fwd && pkt->isRouteFlood() && pkt->getPathHashCount() == 0) {
+    uint8_t type = pkt->getPayloadType();
+    if (type == PAYLOAD_TYPE_GRP_TXT || type == PAYLOAD_TYPE_GRP_DATA) {
+      watch_candidate = true;
+    }
+  }
+
+  mesh::DispatcherAction action = mesh::Mesh::onRecvPacket(pkt);
+
+  if (watch_candidate && isRetransmitAction(action)) {
+    // Save after routeRecvPacket() appended our hash — retries must re-TX with same path.
+    uint8_t saved_wire[MAX_TRANS_UNIT];
+    uint8_t saved_len = pkt->writeTo(saved_wire);
+    startChanPropWatch(pkt, saved_wire, saved_len);
+  }
+
+  return action;
+}
+
+#endif
 
 void MyMesh::onAnonDataRecv(mesh::Packet *packet, const uint8_t *secret, const mesh::Identity &sender,
                             uint8_t *data, size_t len) {
@@ -921,6 +1052,10 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
   pending_discover_tag = 0;
   pending_discover_until = 0;
 
+#if CHAN_PROP_RETRY_ENABLE
+  _chan_prop_watch.active = false;
+#endif
+
   memset(default_scope.key, 0, sizeof(default_scope.key));
 }
 
@@ -1148,7 +1283,7 @@ void MyMesh::formatRadioStatsReply(char *reply) {
 }
 
 void MyMesh::formatPacketStatsReply(char *reply) {
-  StatsFormatHelper::formatPacketStats(reply, radio_driver, getNumSentFlood(), getNumSentDirect(), 
+  StatsFormatHelper::formatPacketStats(reply, radio_driver, getNumSentFlood(), getNumSentDirect(),
                                        getNumRecvFlood(), getNumRecvDirect());
 }
 
@@ -1268,6 +1403,10 @@ void MyMesh::loop() {
 #endif
 
   mesh::Mesh::loop();
+
+#if CHAN_PROP_RETRY_ENABLE
+  checkChanPropRetry();
+#endif
 
   if (next_flood_advert && millisHasNowPassed(next_flood_advert)) {
     mesh::Packet *pkt = createSelfAdvert();

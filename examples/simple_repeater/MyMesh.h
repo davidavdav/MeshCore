@@ -80,6 +80,30 @@ struct NeighbourInfo {
 
 #define PACKET_LOG_FILE  "/packet_log"
 
+#ifndef CHAN_PROP_RETRY_ENABLE
+  #define CHAN_PROP_RETRY_ENABLE 1
+#endif
+#ifndef CHAN_PROP_RETRY_TIMEOUT_MS
+  #define CHAN_PROP_RETRY_TIMEOUT_MS 5000
+#endif
+#ifndef CHAN_PROP_RETRY_MAX_ATTEMPTS
+  #define CHAN_PROP_RETRY_MAX_ATTEMPTS 4
+#endif
+
+#if CHAN_PROP_RETRY_ENABLE
+struct ChanPropWatch {
+  bool active;
+  uint8_t hash[MAX_HASH_SIZE];
+  uint8_t wire[MAX_TRANS_UNIT];
+  uint8_t wire_len;
+  uint8_t path_hash_size;
+  uint16_t transport_codes[2];
+  bool is_transport_flood;
+  unsigned long deadline;
+  uint8_t attempts;
+};
+#endif
+
 class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
   FILESYSTEM* _fs;
   uint32_t last_millis;
@@ -130,6 +154,16 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
   File openAppend(const char* fname);
   bool isLooped(const mesh::Packet* packet, const uint8_t max_counters[]);
 
+#if CHAN_PROP_RETRY_ENABLE
+  ChanPropWatch _chan_prop_watch;
+
+  void startChanPropWatch(mesh::Packet* pkt, const uint8_t* wire, uint8_t wire_len);
+  void checkChanPropRepeat(mesh::Packet* pkt);
+  void checkChanPropRetry();
+  void retryChanPropFlood();
+  void cancelChanPropWatch();
+#endif
+
 protected:
   float getAirtimeBudgetFactor() const override {
     return _prefs.airtime_factor;
@@ -164,6 +198,7 @@ protected:
 #endif
 
   bool filterRecvFloodPacket(mesh::Packet* pkt) override;
+  mesh::DispatcherAction onRecvPacket(mesh::Packet* pkt) override;
 
   void onAnonDataRecv(mesh::Packet* packet, const uint8_t* secret, const mesh::Identity& sender, uint8_t* data, size_t len) override;
   int searchPeersByHash(const uint8_t* hash) override;
@@ -233,7 +268,7 @@ public:
     {
       bridge.begin();
     }
-    else 
+    else
     {
       bridge.end();
     }
