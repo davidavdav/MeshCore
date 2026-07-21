@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <Mesh.h>
 #include <RTClib.h>
+#include <cstdint>
 #include <target.h>
 
 #if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
@@ -101,6 +102,7 @@ struct ChanPropWatch {
   bool is_transport_flood;
   unsigned long deadline;
   uint8_t attempts;
+  uint32_t stats[CHAN_PROP_RETRY_MAX_ATTEMPTS+1];
 };
 #endif
 
@@ -249,6 +251,7 @@ public:
   void formatStatsReply(char *reply) override;
   void formatRadioStatsReply(char *reply) override;
   void formatPacketStatsReply(char *reply) override;
+  void formatRetryStatsReply(char *reply) override;
   void startRegionsLoad() override;
   bool saveRegions() override;
   void onDefaultRegionChanged(const RegionEntry* r) override;

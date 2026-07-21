@@ -629,6 +629,7 @@ void MyMesh::checkChanPropRepeat(mesh::Packet *pkt) {
 
   if (pkt->getPathHashCount() > 0) {
     MESH_DEBUG_PRINTLN("chan prop retry: heard repeat, path_count=%d", (uint32_t)pkt->getPathHashCount());
+    _chan_prop_watch.stats[_chan_prop_watch.attempts - 1]++;
     cancelChanPropWatch();
   }
 }
@@ -664,6 +665,7 @@ void MyMesh::checkChanPropRetry() {
 
   if (_prefs.disable_fwd || _chan_prop_watch.attempts >= CHAN_PROP_RETRY_MAX_ATTEMPTS) {
     MESH_DEBUG_PRINTLN("chan prop retry: giving up after %d attempt(s)", (uint32_t)_chan_prop_watch.attempts);
+    _chan_prop_watch.stats[CHAN_PROP_RETRY_MAX_ATTEMPTS]++;
     cancelChanPropWatch();
     return;
   }
@@ -1054,6 +1056,7 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
 
 #if CHAN_PROP_RETRY_ENABLE
   _chan_prop_watch.active = false;
+  memset(_chan_prop_watch.stats, 0, sizeof(_chan_prop_watch.stats));
 #endif
 
   memset(default_scope.key, 0, sizeof(default_scope.key));
@@ -1287,6 +1290,20 @@ void MyMesh::formatPacketStatsReply(char *reply) {
                                        getNumRecvFlood(), getNumRecvDirect());
 }
 
+void MyMesh::formatRetryStatsReply(char *reply) {
+#if CHAN_PROP_RETRY_ENABLE
+  char *p = reply;
+  p += sprintf(p, "{\"echo_after\":[");
+  for (int i = 0; i < CHAN_PROP_RETRY_MAX_ATTEMPTS; i++) {
+    if (i > 0) *p++ = ',';
+    p += sprintf(p, "%u", (unsigned)_chan_prop_watch.stats[i]);
+  }
+  sprintf(p, "],\"no_echo\":%u}", (unsigned)_chan_prop_watch.stats[CHAN_PROP_RETRY_MAX_ATTEMPTS]);
+#else
+  strcpy(reply, "{\"error\":\"disabled\"}");
+#endif
+}
+
 void MyMesh::saveIdentity(const mesh::LocalIdentity &new_id) {
 #if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
   IdentityStore store(*_fs, "");
@@ -1304,6 +1321,9 @@ void MyMesh::clearStats() {
   radio_driver.resetStats();
   resetStats();
   ((SimpleMeshTables *)getTables())->resetStats();
+#if CHAN_PROP_RETRY_ENABLE
+  memset(_chan_prop_watch.stats, 0, sizeof(_chan_prop_watch.stats));
+#endif
 }
 
 void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply) {
